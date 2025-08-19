@@ -1,8 +1,5 @@
-#transfer learning
-#running single thread in docker with isolcpus and no chrt scheduling explicitly set
-#gpu passthrough x2
-#link https://www.kaggle.com/competitions/isic-2024-challenge
-#put notebook into folder /mnt/zpool1/zpool1/docker_dir/Documents/isic_skin
+#optuna optimize
+
 
 import os
 import numpy as np
@@ -869,7 +866,7 @@ def focal_loss(logits, targets, alpha, gamma=2.0):
     loss = (1 - p_t) ** gamma * ce
     return loss.mean()
 
-
+"""
 class_counts = [400_000, 500, 200, 156]
 sample_weights = 1. / torch.tensor([class_counts[y] for y in train_y], dtype=torch.double)
 rate = 4e-6#trial.suggest_float('rate', 1e-6, 1e-4, log = True)
@@ -972,11 +969,17 @@ torch.save({
             'optimizer_state_dict': optimizer.state_dict(),
             'loss': loss
             }, 'augmented.tar')
+"""
+
 
 resnet = torchvision.models.resnet18(pretrained = True)
 for param in resnet.parameters():
     param.requires_grad = False
 resnet.fc = nn.Linear(in_features = 512, out_features = 64)
+
+net = mask_context()
+checkpoint = torch.load('augmented.tar', weights_only=True)
+net.load_state_dict(checkpoint['model_state_dict'])
 
 for param in net.parameters():
     param.requires_grad = False
@@ -1000,80 +1003,90 @@ class combined_resnet(nn.Module):
         combine = self.linear2(combine)
         return combine
 
-ensemble = combined_resnet().to(device)
 
-rate = 0.001
-ens_opt = torch.optim.Adam(
-    emsemble.parameters(),
-    lr=rate)
-epochs = 10
-scheduler = torch.optim.lr_scheduler.OneCycleLR(
-    optimizer,
-    max_lr=rate,
-    total_steps=epochs * len(trainloader),
-    pct_start=0.1,
-    anneal_strategy='cos',
-    final_div_factor=30
-)
+import optuna
+def objective(trial):
+    ensemble = combined_resnet().to(device)
 
-for epoch in range(5):
-    running_loss = 0
-    acc_loss =torch.tensor((0)).to(device)
-    ensemble.train(True)
-    for i, (x, y) in enumerate(trainloader, 0):
-        with autocast(enabled=True):
-            x = x.to(device)
-            x = rgb_to_lab(x)
-            y = y.to(device)
-            outputs = ensemble(x)
-            loss = focal_loss(outputs, y, alpha = alpha#.reshape(-1,1).float()
-                          )# / len(trainloader)
-        running_loss += loss.detach()
-        scaler.scale(loss).backward()
-        scaler.step(ens_opt)
-        scheduler.step()
-
-        scaler.update()
-
-        ens_opt.zero_grad()
-        
-        if i % 2000 == 0:    # print every 2000 mini-batches
-            print(f'[{epoch + 1}, {i + 1:5d}] loss: {running_loss / 2000:.5f}')
-            running_loss =0
-    ensemble.eval()
-    output_list =[]
-    label_list =[]
-    for i, (x,y) in enumerate(testloader,0):
-        with torch.no_grad():
-            x = x.to(device)
-            x = rgb_to_lab(x)
-            outputs = ensemble(x)
-            loss = focal_loss(outputs, y.to(device), alpha = alpha)
-            outputs = outputs.type(torch.float32)
-            outputs = outputs.detach().cpu().numpy()
-            output_list.append(outputs.reshape(-1,4))
-            y = y.type(torch.float32)
-            label_list.append(y.numpy().reshape(-1,1))
-
-    print(loss)
-    output_list = np.vstack(output_list)
-    label_list = np.vstack(label_list)
+    rate = 0.001
+    ens_opt = torch.optim.Adam(
+        emsemble.parameters(),
+        lr=rate)
+    epochs = 10
+    scheduler = torch.optim.lr_scheduler.OneCycleLR(
+        optimizer,
+        max_lr=rate,
+        total_steps=epochs * len(trainloader),
+        pct_start=0.1,
+        anneal_strategy='cos',
+        final_div_factor=30
+    )
+    a1 = trial.suggest_float('a1',0.1, 0.9)
+    a2 = trial.suggest_float('a2',0.1, 0.9)
+    a3 = trial.suggest_float('a3',0.1, 0.9)
+    a4 = trial.suggest_float('a4',0.1, 0.9)
+    alpha = torch.tensor((a1, a2, a3, a4), dtype = torch.float32).to(device)
+    for epoch in range(10):
+        running_loss = 0
+        acc_loss =torch.tensor((0)).to(device)
+        ensemble.train(True)
+        for i, (x, y) in enumerate(trainloader, 0):
+            with autocast(enabled=True):
+                x = x.to(device)
+                x = rgb_to_lab(x)
+                y = y.to(device)
+                outputs = ensemble(x)
+                loss = focal_loss(outputs, y, alpha = alpha#.reshape(-1,1).float()
+                              )# / len(trainloader)
+            running_loss += loss.detach()
+            scaler.scale(loss).backward()
+            scaler.step(ens_opt)
+            scheduler.step()
     
-    label_list[np.argwhere(label_list == 1)] = 0
-    label_list[np.argwhere(label_list == 2)] = 1
-    label_list[np.argwhere(label_list == 3)] = 1
-    label_list = pd.DataFrame(label_list)
-    malignant_chance = pd.DataFrame()
-    malignant_chance['malignant'] = output_list[:,2] + output_list[:,3]
-    #print('roc auc')
-    print(roc_auc_score(label_list, malignant_chance['malignant']))
-    #print('pr auc')
-    print(pr_auc(label_list, malignant_chance['malignant']))
+            scaler.update()
+    
+            ens_opt.zero_grad()
+        ensemble.eval()
+        output_list =[]
+        label_list =[]
+        for i, (x,y) in enumerate(testloader,0):
+            with torch.no_grad():
+                x = x.to(device)
+                x = rgb_to_lab(x)
+                outputs = ensemble(x)
+                loss = focal_loss(outputs, y.to(device), alpha = alpha)
+                outputs = outputs.type(torch.float32)
+                outputs = outputs.detach().cpu().numpy()
+                output_list.append(outputs.reshape(-1,4))
+                y = y.type(torch.float32)
+                label_list.append(y.numpy().reshape(-1,1))
+    
+        print(loss)
+        output_list = np.vstack(output_list)
+        label_list = np.vstack(label_list)
+        
+        label_list[np.argwhere(label_list == 1)] = 0
+        label_list[np.argwhere(label_list == 2)] = 1
+        label_list[np.argwhere(label_list == 3)] = 1
+        label_list = pd.DataFrame(label_list)
+        malignant_chance = pd.DataFrame()
+        malignant_chance['malignant'] = output_list[:,2] + output_list[:,3]
+        #print('roc auc')
+        print(roc_auc_score(label_list, malignant_chance['malignant']))
+        #print('pr auc')
+        return(roc_auc_score(label_list, malignant_chance['malignant']))
 
+study = optuna.create_study(direction = 'maximize')
+study.optimize(objective, n_trials = 100)
+print(study.best_params)
+import joblib
 
+joblib.dump(study, 'optuna_ensemble.pkl')
+"""
 torch.save({
             'epoch': epoch,
             'model_state_dict': ensemble.state_dict(),
             'optimizer_state_dict': ens_opt.state_dict(),
             'loss': loss
             }, 'ensemble_resnet18.tar')
+"""
