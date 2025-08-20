@@ -907,6 +907,7 @@ scheduler = torch.optim.lr_scheduler.OneCycleLR(
     anneal_strategy='cos',
     final_div_factor=30
 )
+"""
 a1 = 0.2#0.3#trial.suggest_float('a1',0.1, 0.9)
 a2 = 0.2#0.5#trial.suggest_float('a2',0.1, 0.9)
 a3 = 0.2#0.675#trial.suggest_float('a3',0.1, 0.9)
@@ -972,6 +973,10 @@ torch.save({
             'optimizer_state_dict': optimizer.state_dict(),
             'loss': loss
             }, 'augmented.tar')
+"""
+net = mask_context()
+checkpoint = torch.load('augmented.tar', weights_only=True)
+net.load_state_dict(checkpoint['model_state_dict'])
 
 resnet = torchvision.models.resnet18(pretrained = True)
 for param in resnet.parameters():
@@ -980,12 +985,12 @@ resnet.fc = nn.Linear(in_features = 512, out_features = 64)
 
 for param in net.parameters():
     param.requires_grad = False
-net.self.lin3 = nn.Linear(in_features = 32, out_features = 32)
+net.lin3 = nn.Linear(in_features = 32, out_features = 32)
 
 
 class combined_resnet(nn.Module):
     def __init__(self,fc = 32):
-        super(mask_context, self).__init__()
+        super(combined_resnet, self).__init__()
         self.texture = net
         self.resnet = resnet
         self.linear1 = nn.Linear(96, 32)
@@ -1001,12 +1006,16 @@ class combined_resnet(nn.Module):
         return combine
 
 ensemble = combined_resnet().to(device)
-
-rate = 0.001
+a1 = 0.2#0.3#trial.suggest_float('a1',0.1, 0.9)
+a2 = 0.2#0.5#trial.suggest_float('a2',0.1, 0.9)
+a3 = 0.2#0.675#trial.suggest_float('a3',0.1, 0.9)
+a4 = 0.2#0.675#trial.suggest_float('a4',0.1, 0.9)
+alpha = torch.tensor((a1, a2, a3, a4), dtype = torch.float32).to(device)
+rate = 0.0001
 ens_opt = torch.optim.Adam(
-    emsemble.parameters(),
+    ensemble.parameters(),
     lr=rate)
-epochs = 10
+epochs = 5
 scheduler = torch.optim.lr_scheduler.OneCycleLR(
     optimizer,
     max_lr=rate,

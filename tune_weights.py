@@ -970,7 +970,12 @@ torch.save({
             'loss': loss
             }, 'augmented.tar')
 """
-
+class_counts = [400_000, 500, 200, 156]
+sample_weights = 1. / torch.tensor([class_counts[y] for y in train_y], dtype=torch.double)
+rate = 4e-6#trial.suggest_float('rate', 1e-6, 1e-4, log = True)
+sampler = WeightedRandomSampler(sample_weights, num_samples=len(sample_weights), replacement=True)
+trainloader = DataLoader(trainset, batch_size = 32, sampler = sampler, pin_memory = True)
+testloader = DataLoader(testset, batch_size = 128, shuffle = False, pin_memory = True)
 
 resnet = torchvision.models.resnet18(pretrained = True)
 for param in resnet.parameters():
@@ -983,12 +988,12 @@ net.load_state_dict(checkpoint['model_state_dict'])
 
 for param in net.parameters():
     param.requires_grad = False
-net.self.lin3 = nn.Linear(in_features = 32, out_features = 32)
+net.lin3 = nn.Linear(in_features = 32, out_features = 32)
 
 
 class combined_resnet(nn.Module):
-    def __init__(self,fc = 32):
-        super(mask_context, self).__init__()
+    def __init__(self):
+        super(combined_resnet, self).__init__()
         self.texture = net
         self.resnet = resnet
         self.linear1 = nn.Linear(96, 32)
@@ -1005,16 +1010,23 @@ class combined_resnet(nn.Module):
 
 
 import optuna
+from sklearn.metrics import precision_recall_curve, auc
+checkpoint = torch.load('ensemble_resnet18.tar', weights_only=True)
+
+def pr_auc(y_true, y_scores):
+    precision, recall, _ = precision_recall_curve(y_true, y_scores)
+    pr_auc = auc(recall, precision)
+    return pr_auc
 def objective(trial):
     ensemble = combined_resnet().to(device)
-
-    rate = 0.001
+    ensemble.load_state_dict(checkpoint['model_state_dict'])
+    rate = 0.0001
     ens_opt = torch.optim.Adam(
-        emsemble.parameters(),
+        ensemble.parameters(),
         lr=rate)
-    epochs = 10
+    epochs = 2
     scheduler = torch.optim.lr_scheduler.OneCycleLR(
-        optimizer,
+        ens_opt,
         max_lr=rate,
         total_steps=epochs * len(trainloader),
         pct_start=0.1,
@@ -1026,7 +1038,7 @@ def objective(trial):
     a3 = trial.suggest_float('a3',0.1, 0.9)
     a4 = trial.suggest_float('a4',0.1, 0.9)
     alpha = torch.tensor((a1, a2, a3, a4), dtype = torch.float32).to(device)
-    for epoch in range(10):
+    for epoch in range(2):
         running_loss = 0
         acc_loss =torch.tensor((0)).to(device)
         ensemble.train(True)
@@ -1074,7 +1086,7 @@ def objective(trial):
         #print('roc auc')
         print(roc_auc_score(label_list, malignant_chance['malignant']))
         #print('pr auc')
-        return(roc_auc_score(label_list, malignant_chance['malignant']))
+        return(pr_auc(label_list, malignant_chance['malignant']))
 
 study = optuna.create_study(direction = 'maximize')
 study.optimize(objective, n_trials = 100)
